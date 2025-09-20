@@ -1,0 +1,6 @@
+outs:
+- md5: b7baaba13edc62026170ae167fc0e343.dir
+  size: 754767913
+  nfiles: 10
+  hash: md5
+  path: deberta3_lora_400000k

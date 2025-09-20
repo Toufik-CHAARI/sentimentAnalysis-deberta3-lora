@@ -1,0 +1,7 @@
+[core]
+    remote = storage
+['remote "storage"']
+    url = s3://sentiment-analysis-deberta3-lora
+    access_key_id = AKIAQLSIVDWTLOX7XUXJ
+    secret_access_key = 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
+    region = eu-west-3
