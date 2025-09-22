@@ -84,6 +84,10 @@ jobs:
             "echo \"Logging into ECR...\"",
             "aws ecr get-login-password --region ${{ env.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}",
 
+            "# Check disk space before cleanup",
+            "echo \"Checking disk space before cleanup...\"",
+            "df -h /",
+
             "# Stop and remove existing container",
             "echo \"Stopping existing container...\"",
             "sudo docker stop sentiment-analysis-app || true",
@@ -91,11 +95,32 @@ jobs:
 
             "# Remove old images to free up space",
             "echo \"Cleaning up old images...\"",
-            "sudo docker image prune -af --filter \"until=24h\" || true",
+            "sudo docker system prune -af || true",
+            "sudo docker volume prune -f || true",
+
+            "# Check disk space after cleanup",
+            "echo \"Checking disk space after cleanup...\"",
+            "df -h /",
+
+            "# Check if we have enough space (need at least 5GB for the 4GB image)",
+            "AVAILABLE_SPACE=$(df / | tail -1 | awk '{print $4}')",
+            "REQUIRED_SPACE=5242880",
+            "if [ $AVAILABLE_SPACE -lt $REQUIRED_SPACE ]; then",
+            "  echo \"ERROR: Not enough disk space. Available: $AVAILABLE_SPACE KB, Required: $REQUIRED_SPACE KB\"",
+            "  echo \"Performing additional cleanup...\"",
+            "  sudo apt autoremove -y || true",
+            "  sudo apt autoclean || true",
+            "  sudo journalctl --vacuum-time=1d || true",
+            "  df -h /",
+            "fi",
 
             "# Pull the latest image",
             "echo \"Pulling latest image...\"",
             "sudo docker pull ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
+
+            "# Verify image was pulled successfully",
+            "echo \"Verifying image pull...\"",
+            "sudo docker images | grep sentiment-analysis-deberta3-lora",
 
             "# Run the new container",
             "echo \"Starting new container...\"",
@@ -103,8 +128,13 @@ jobs:
 
             "# Verify deployment",
             "echo \"Verifying deployment...\"",
-            "sleep 10",
+            "sleep 15",
+            "echo \"Container status:\"",
             "sudo docker ps | grep sentiment-analysis-app",
+            "echo \"Container logs (last 20 lines):\"",
+            "sudo docker logs --tail 20 sentiment-analysis-app",
+            "echo \"Final disk space check:\"",
+            "df -h /",
             "echo \"Deployment completed successfully!\"",
             "echo \"Application is available at: http://$INSTANCE_IP\""
           ]' \
