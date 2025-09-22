@@ -1,0 +1,121 @@
+name: Deploy to EC2
+
+on:
+  workflow_run:
+    workflows: ["Deploy to AWS ECR"]
+    types:
+      - completed
+    branches: [ main, master ]
+
+env:
+  AWS_REGION: eu-west-3
+  ECR_REPOSITORY: sentiment-analysis-deberta3-lora
+
+jobs:
+  deploy-to-ec2:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Deploy to EC2 using SSM
+      run: |
+        # Get EC2 instance public IP
+        INSTANCE_IP=$(aws ec2 describe-instances \
+          --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Reservations[0].Instances[0].PublicIpAddress' \
+          --output text)
+
+        echo "Deploying to EC2 instance: ${{ secrets.EC2_INSTANCE_ID }} (IP: $INSTANCE_IP)"
+
+        # Send command to EC2 instance using AWS Systems Manager
+        aws ssm send-command \
+          --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
+          --region ${{ env.AWS_REGION }} \
+          --document-name "AWS-RunShellScript" \
+          --parameters 'commands=[
+            "#!/bin/bash",
+            "set -e",
+            "echo \"Starting deployment...\"",
+
+            "# Update system packages",
+            "sudo apt-get update -y",
+
+            "# Install Docker if not already installed",
+            "if ! command -v docker &> /dev/null; then",
+            "  echo \"Installing Docker...\"",
+            "  sudo apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release",
+            "  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg",
+            "  echo \"deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null",
+            "  sudo apt-get update -y",
+            "  sudo apt-get install -y docker-ce docker-ce-cli containerd.io",
+            "  sudo usermod -aG docker ubuntu",
+            "fi",
+
+            "# Install AWS CLI if not already installed",
+            "if ! command -v aws &> /dev/null; then",
+            "  echo \"Installing AWS CLI...\"",
+            "  curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"awscliv2.zip\"",
+            "  unzip awscliv2.zip",
+            "  sudo ./aws/install",
+            "  rm -rf aws awscliv2.zip",
+            "fi",
+
+            "# Configure AWS credentials",
+            "export AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}",
+            "export AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}",
+            "export AWS_DEFAULT_REGION=${{ env.AWS_REGION }}",
+
+            "# Login to ECR",
+            "echo \"Logging into ECR...\"",
+            "aws ecr get-login-password --region ${{ env.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}",
+
+            "# Stop and remove existing container",
+            "echo \"Stopping existing container...\"",
+            "sudo docker stop sentiment-analysis-app || true",
+            "sudo docker rm sentiment-analysis-app || true",
+
+            "# Remove old images to free up space",
+            "echo \"Cleaning up old images...\"",
+            "sudo docker image prune -af --filter \"until=24h\" || true",
+
+            "# Pull the latest image",
+            "echo \"Pulling latest image...\"",
+            "sudo docker pull ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
+
+            "# Run the new container",
+            "echo \"Starting new container...\"",
+            "sudo docker run -d \\",
+            "  --name sentiment-analysis-app \\",
+            "  --restart unless-stopped \\",
+            "  -p 80:8501 \\",
+            "  -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \\",
+            "  -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \\",
+            "  -e AWS_DEFAULT_REGION=${{ env.AWS_REGION }} \\",
+            "  -e DVC_BUCKET=${{ secrets.DVC_S3_BUCKET }} \\",
+            "  ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
+
+            "# Verify deployment",
+            "echo \"Verifying deployment...\"",
+            "sleep 10",
+            "sudo docker ps | grep sentiment-analysis-app",
+            "echo \"Deployment completed successfully!\"",
+            "echo \"Application is available at: http://$INSTANCE_IP\""
+          ]' \
+          --output text --query 'Command.CommandId'
+
+        echo "Deployment command sent successfully!"
