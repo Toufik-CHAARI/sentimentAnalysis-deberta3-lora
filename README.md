@@ -1,6 +1,10 @@
 # Sentiment Analysis with DeBERTa v3 + LoRA
 
-A Streamlit application for sentiment analysis using a fine-tuned DeBERTa v3 model with LoRA (Low-Rank Adaptation). The model is stored in S3 and pulled via DVC during Docker image building.
+A production-ready Streamlit application for sentiment analysis using a fine-tuned DeBERTa v3 model with LoRA (Low-Rank Adaptation). The model is stored in S3 and pulled via DVC during Docker image building. Features automated CI/CD deployment to AWS EC2 with ECR.
+
+![Demo](deberta3lorav2.gif)
+![Demo](deberta3-lora-stat.gif)
+
 
 ## 🚀 Features
 
@@ -53,7 +57,7 @@ dvc pull deberta3_lora_400000k.dvc
 ### 5. Run the Application
 
 ```bash
-streamlit run app.py
+streamlit run app_refactored.py
 ```
 
 The application will be available at `http://localhost:8501`.
@@ -63,8 +67,11 @@ The application will be available at `http://localhost:8501`.
 ### Local Docker Build
 
 ```bash
-# Build the Docker image
-make build
+# Build the Docker image with AWS credentials
+make build-with-secrets
+
+# Or use the build script
+./build-with-secrets.sh -a "your-access-key" -s "your-secret-key" -b "your-bucket"
 
 # Run the container locally
 make run
@@ -77,7 +84,8 @@ make run-detached
 
 ```bash
 make help                    # Show all available commands
-make build                   # Build Docker image locally
+make build                   # Build Docker image locally (without AWS credentials)
+make build-with-secrets      # Build Docker image with AWS credentials
 make run                     # Run Docker container locally
 make run-detached           # Run Docker container in background
 make stop                    # Stop running container
@@ -85,6 +93,11 @@ make logs                    # Show container logs
 make shell                   # Open shell in running container
 make clean                   # Clean up Docker resources
 make test-local              # Build and test locally
+make test                    # Run tests with pytest
+make test-coverage           # Run tests with coverage report
+make lint                    # Run linting with flake8
+make format                  # Format code with black and isort
+make type-check              # Run type checking with mypy
 ```
 
 ## ☁️ AWS Deployment
@@ -112,10 +125,8 @@ Set up the following secrets in your GitHub repository:
 
 - `AWS_ACCESS_KEY_ID`: Your AWS access key
 - `AWS_SECRET_ACCESS_KEY`: Your AWS secret key
-- `DVC_BUCKET`: Your S3 bucket name for DVC
-- `EC2_HOST`: Your EC2 instance public IP or domain
-- `EC2_USERNAME`: SSH username for EC2 (usually `ubuntu`)
-- `EC2_SSH_KEY`: Private SSH key for EC2 access
+- `DVC_S3_BUCKET`: Your S3 bucket name for DVC
+- `EC2_INSTANCE_ID`: Your EC2 instance ID (e.g., i-0e8847be115811a7c)
 
 ### Manual EC2 Deployment
 
@@ -125,12 +136,12 @@ If you prefer manual deployment:
 # SSH into your EC2 instance
 ssh -i your-key.pem ubuntu@your-ec2-ip
 
-# Install Docker
+# Install Docker (if not already installed)
 sudo apt-get update
 sudo apt-get install -y docker.io
 sudo usermod -aG docker ubuntu
 
-# Install AWS CLI
+# Install AWS CLI (if not already installed)
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
 unzip awscliv2.zip
 sudo ./aws/install
@@ -138,17 +149,25 @@ sudo ./aws/install
 # Configure AWS credentials
 aws configure
 
-# Login to ECR
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin your-account-id.dkr.ecr.us-east-1.amazonaws.com
+# Get your account ID and login to ECR
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws ecr get-login-password --region eu-west-3 | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.eu-west-3.amazonaws.com
 
-# Pull and run the image
-docker pull your-account-id.dkr.ecr.us-east-1.amazonaws.com/sentiment-analysis-deberta3-lora:latest
-docker run -d --name sentiment-analysis-app -p 80:8501 \
+# Stop and remove existing container (if any)
+sudo docker stop sentiment-analysis-app || true
+sudo docker rm sentiment-analysis-app || true
+
+# Clean up old images
+sudo docker image prune -af
+
+# Pull and run the latest image
+docker pull $ACCOUNT_ID.dkr.ecr.eu-west-3.amazonaws.com/sentiment-analysis-deberta3-lora:latest
+docker run -d --name sentiment-analysis-app --restart unless-stopped -p 80:8501 \
   -e AWS_ACCESS_KEY_ID=your-access-key \
   -e AWS_SECRET_ACCESS_KEY=your-secret-key \
-  -e AWS_DEFAULT_REGION=us-east-1 \
+  -e AWS_DEFAULT_REGION=eu-west-3 \
   -e DVC_BUCKET=your-bucket \
-  your-account-id.dkr.ecr.us-east-1.amazonaws.com/sentiment-analysis-deberta3-lora:latest
+  $ACCOUNT_ID.dkr.ecr.eu-west-3.amazonaws.com/sentiment-analysis-deberta3-lora:latest
 ```
 
 ## 🔧 Configuration
@@ -164,12 +183,14 @@ docker run -d --name sentiment-analysis-app -p 80:8501 \
 
 ### Model Configuration
 
-The model is configured in `app.py`:
+The model is configured in `src/config.py`:
 
-- **Model Path**: `deberta3_lora_400000k/`
+- **Model Path**: `deberta3_lora_400000k/merged/`
 - **Labels**:
   - 0: "😞 Negative Sentiment"
   - 1: "😊 Positive Sentiment"
+- **Batch Size**: 32
+- **Max Length**: 128
 
 ## 📊 Usage
 
@@ -178,6 +199,26 @@ The model is configured in `app.py`:
 3. **Visualization**: View sentiment distribution and confidence scores
 4. **Batch Processing**: Upload CSV files for bulk analysis
 5. **EDA**: Explore the dataset with interactive visualizations
+
+## 🏗️ Project Structure
+
+```
+sentimentAnalysis-deberta3-lora/
+├── src/                          # Modular application code
+│   ├── config.py                 # Configuration settings
+│   ├── data_service.py           # Data handling and preprocessing
+│   ├── model_service.py          # Model loading and inference
+│   ├── utils.py                  # Utility functions
+│   └── visualization_service.py  # Plotting and visualization
+├── tests/                        # Test files
+├── docs/                         # Documentation
+├── .github/workflows/            # CI/CD pipelines
+├── app_refactored.py             # Main Streamlit application
+├── Dockerfile                    # Docker configuration
+├── Makefile                      # Build and deployment commands
+├── build-with-secrets.sh         # Secure build script
+└── requirements.txt              # Python dependencies
+```
 
 ## 🏗️ Architecture
 
@@ -200,29 +241,44 @@ The model is configured in `app.py`:
 The project includes two GitHub Actions workflows:
 
 1. **Deploy to AWS ECR** (`deploy.yml`):
-   - Builds Docker image
-   - Pushes to ECR
+   - Builds Docker image with AWS credentials
+   - Creates ECR repository if it doesn't exist
+   - Pushes to ECR with commit-specific and latest tags
    - Triggers on push to main/master
 
 2. **Deploy to EC2** (`deploy-ec2.yml`):
-   - Deploys to EC2 instance
+   - Uses AWS Systems Manager (SSM) for secure deployment
+   - Stops and removes existing container
+   - Cleans up old Docker images
+   - Pulls latest image from ECR
+   - Starts new container with proper environment variables
    - Runs after successful ECR deployment
-   - Updates running container
+   - Verifies deployment status
 
 ## 🧪 Testing
 
 ```bash
+# Run all tests
+make test
+
+# Run tests with coverage
+make test-coverage
+
 # Test local build
 make test-local
 
 # Test health endpoint
 curl -f http://localhost:8501/_stcore/health
+
+# Test production endpoint
+curl -f http://your-ec2-ip/_stcore/health
 ```
 
 ## 📝 API Endpoints
 
 - **Health Check**: `GET /_stcore/health`
 - **Main App**: `GET /` (Streamlit interface)
+- **Production URL**: `http://your-ec2-ip` (port 80)
 
 ## 🐛 Troubleshooting
 
@@ -231,7 +287,10 @@ curl -f http://localhost:8501/_stcore/health
 1. **Import Error**: Restart the Docker container
 2. **Model Not Found**: Ensure DVC credentials are correct
 3. **AWS Access Denied**: Check IAM permissions for S3 and ECR
-4. **EC2 Connection Failed**: Verify SSH key and security groups
+4. **EC2 Connection Failed**: Verify EC2 instance ID and SSM agent
+5. **No Space Left on Device**: Increase EBS volume size (minimum 20GB recommended)
+6. **Container Won't Start**: Check environment variables and logs
+7. **App Not Accessible**: Verify security group allows port 80
 
 ### Logs
 
@@ -240,7 +299,14 @@ curl -f http://localhost:8501/_stcore/health
 make logs
 
 # Or directly with Docker
-docker logs sentiment-analysis-deberta3-lora-container
+docker logs sentiment-analysis-app
+
+# Check container status
+docker ps
+
+# Check system resources
+df -h
+free -h
 ```
 
 ## 📄 License
