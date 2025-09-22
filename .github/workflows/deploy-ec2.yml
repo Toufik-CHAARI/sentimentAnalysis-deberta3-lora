@@ -43,7 +43,7 @@ jobs:
         echo "Deploying to EC2 instance: ${{ secrets.EC2_INSTANCE_ID }} (IP: $INSTANCE_IP)"
 
         # Send command to EC2 instance using AWS Systems Manager
-        aws ssm send-command \
+        COMMAND_ID=$(aws ssm send-command \
           --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
           --region ${{ env.AWS_REGION }} \
           --document-name "AWS-RunShellScript" \
@@ -51,10 +51,8 @@ jobs:
             "#!/bin/bash",
             "set -e",
             "echo \"Starting deployment...\"",
-
             "# Update system packages",
             "sudo apt-get update -y",
-
             "# Install Docker if not already installed",
             "if ! command -v docker &> /dev/null; then",
             "  echo \"Installing Docker...\"",
@@ -65,7 +63,6 @@ jobs:
             "  sudo apt-get install -y docker-ce docker-ce-cli containerd.io",
             "  sudo usermod -aG docker ubuntu",
             "fi",
-
             "# Install AWS CLI if not already installed",
             "if ! command -v aws &> /dev/null; then",
             "  echo \"Installing AWS CLI...\"",
@@ -74,36 +71,29 @@ jobs:
             "  sudo ./aws/install",
             "  rm -rf aws awscliv2.zip",
             "fi",
-
             "# Configure AWS credentials",
             "export AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}",
             "export AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}",
             "export AWS_DEFAULT_REGION=${{ env.AWS_REGION }}",
-
             "# Login to ECR",
             "echo \"Logging into ECR...\"",
             "aws ecr get-login-password --region ${{ env.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}",
-
             "# Check disk space before cleanup",
             "echo \"Checking disk space before cleanup...\"",
             "df -h /",
-
             "# Stop and remove existing container",
             "echo \"Stopping existing container...\"",
             "sudo docker stop sentiment-analysis-app || true",
             "sudo docker rm sentiment-analysis-app || true",
-
             "# Remove old images to free up space",
             "echo \"Cleaning up old images...\"",
             "sudo docker system prune -af || true",
             "sudo docker volume prune -f || true",
-
             "# Check disk space after cleanup",
             "echo \"Checking disk space after cleanup...\"",
             "df -h /",
-
             "# Check if we have enough space (need at least 5GB for the 4GB image)",
-            "AVAILABLE_SPACE=$(df / | tail -1 | awk '{print $4}')",
+            "AVAILABLE_SPACE=$(df / | tail -1 | awk \"{print $4}\")",
             "REQUIRED_SPACE=5242880",
             "if [ $AVAILABLE_SPACE -lt $REQUIRED_SPACE ]; then",
             "  echo \"ERROR: Not enough disk space. Available: $AVAILABLE_SPACE KB, Required: $REQUIRED_SPACE KB\"",
@@ -113,19 +103,15 @@ jobs:
             "  sudo journalctl --vacuum-time=1d || true",
             "  df -h /",
             "fi",
-
             "# Pull the latest image",
             "echo \"Pulling latest image...\"",
             "sudo docker pull ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
-
             "# Verify image was pulled successfully",
             "echo \"Verifying image pull...\"",
             "sudo docker images | grep sentiment-analysis-deberta3-lora",
-
             "# Run the new container",
             "echo \"Starting new container...\"",
             "sudo docker run -d --name sentiment-analysis-app --restart unless-stopped -p 80:8501 -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} -e AWS_DEFAULT_REGION=${{ env.AWS_REGION }} -e DVC_BUCKET=${{ secrets.DVC_S3_BUCKET }} ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
-
             "# Verify deployment",
             "echo \"Verifying deployment...\"",
             "sleep 15",
@@ -138,25 +124,59 @@ jobs:
             "echo \"Deployment completed successfully!\"",
             "echo \"Application is available at: http://$INSTANCE_IP\""
           ]' \
-          --output text --query 'Command.CommandId'
+          --output text --query 'Command.CommandId')
 
-        echo "Deployment command sent successfully!"
+        echo "Deployment command sent successfully! Command ID: $COMMAND_ID"
+
+        # Validate command ID was captured
+        if [ -z "$COMMAND_ID" ]; then
+          echo "ERROR: Failed to capture command ID from send-command"
+          exit 1
+        fi
 
         # Wait for command to complete and check status
         echo "Waiting for command to complete..."
         sleep 30
 
-        # Get command status
-        COMMAND_STATUS=$(aws ssm get-command-invocation \
-          --command-id $COMMAND_ID \
-          --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
-          --region ${{ env.AWS_REGION }} \
-          --query 'Status' \
-          --output text)
+        # Get command status with retry logic
+        MAX_RETRIES=10
+        RETRY_COUNT=0
+        COMMAND_STATUS=""
 
-        echo "Command status: $COMMAND_STATUS"
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          COMMAND_STATUS=$(aws ssm get-command-invocation \
+            --command-id $COMMAND_ID \
+            --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Status' \
+            --output text 2>/dev/null || echo "Failed")
+
+          echo "Command status (attempt $((RETRY_COUNT + 1))): $COMMAND_STATUS"
+
+          if [ "$COMMAND_STATUS" = "Success" ]; then
+            echo "Command completed successfully!"
+            break
+          elif [ "$COMMAND_STATUS" = "Failed" ] || [ "$COMMAND_STATUS" = "Cancelled" ] || [ "$COMMAND_STATUS" = "TimedOut" ]; then
+            echo "ERROR: Command failed with status: $COMMAND_STATUS"
+            break
+          elif [ "$COMMAND_STATUS" = "InProgress" ] || [ "$COMMAND_STATUS" = "Pending" ]; then
+            echo "Command still in progress, waiting..."
+            sleep 15
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+          else
+            echo "Unknown status: $COMMAND_STATUS, retrying..."
+            sleep 10
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+          fi
+        done
+
+        if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+          echo "ERROR: Command did not complete within expected time"
+          COMMAND_STATUS="Timeout"
+        fi
 
         # Get command output
+        echo "=== COMMAND OUTPUT ==="
         aws ssm get-command-invocation \
           --command-id $COMMAND_ID \
           --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
@@ -165,9 +185,25 @@ jobs:
           --output text
 
         # Get command error output if any
-        aws ssm get-command-invocation \
+        echo "=== COMMAND ERROR OUTPUT ==="
+        ERROR_OUTPUT=$(aws ssm get-command-invocation \
           --command-id $COMMAND_ID \
           --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
           --region ${{ env.AWS_REGION }} \
           --query 'StandardErrorContent' \
-          --output text
+          --output text)
+
+        if [ -n "$ERROR_OUTPUT" ] && [ "$ERROR_OUTPUT" != "None" ]; then
+          echo "$ERROR_OUTPUT"
+        else
+          echo "No error output"
+        fi
+
+        # Fail the deployment if command was not successful
+        if [ "$COMMAND_STATUS" != "Success" ]; then
+          echo "ERROR: Deployment failed with status: $COMMAND_STATUS"
+          exit 1
+        fi
+
+        echo "=== DEPLOYMENT SUCCESSFUL ==="
+        echo "Application is available at: http://$INSTANCE_IP"
