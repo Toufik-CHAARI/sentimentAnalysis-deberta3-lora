@@ -2,6 +2,7 @@
 Data service for handling dataset operations and data processing.
 """
 
+import os
 import time
 from typing import Optional
 
@@ -22,6 +23,38 @@ class DataService:
     def __init__(self):
         self._cached_data: Optional[pd.DataFrame] = None
         self._cached_random_tweets: Optional[pd.DataFrame] = None
+
+    def _get_optimal_chunk_size(self) -> int:
+        """
+        Determine optimal chunk size based on available memory and environment.
+
+        Returns:
+            Optimal chunk size for CSV reading
+        """
+        # Check if we're in a Docker container (production environment)
+        is_docker = os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER") == "true"
+
+        # Check available memory (rough estimate)
+        try:
+            with open("/proc/meminfo", "r") as f:
+                meminfo = f.read()
+                # Extract available memory in KB
+                for line in meminfo.split("\n"):
+                    if "MemAvailable:" in line:
+                        available_mb = int(line.split()[1]) // 1024
+                        break
+                else:
+                    available_mb = 1024  # Default fallback
+        except (FileNotFoundError, ValueError, IndexError):
+            available_mb = 1024  # Default fallback for non-Linux systems
+
+        # Adjust chunk size based on environment and available memory
+        if is_docker or available_mb < 2048:  # Less than 2GB available
+            return 50_000  # Smaller chunks for constrained environments
+        elif available_mb < 4096:  # Less than 4GB available
+            return 100_000  # Medium chunks
+        else:
+            return 200_000  # Larger chunks for well-resourced environments
 
     def load_sentiment140(
         self,
@@ -48,8 +81,43 @@ class DataService:
         csv_file = f"{path}/training.1600000.processed.noemoticon.csv"
 
         if load_full:
-            # Load the full 1.6M dataset
-            df_raw = pd.read_csv(csv_file, encoding="ISO-8859-1", names=SENTIMENT140_COLUMNS)
+            # Load the full 1.6M dataset with explicit chunking to handle memory constraints
+            print("Loading full dataset (1.6M rows) - this may take a few minutes...")
+
+            # Use optimal chunking based on environment and available memory
+            chunk_size = self._get_optimal_chunk_size()
+            print(f"Using chunk size: {chunk_size:,} rows per chunk")
+
+            chunks = []
+
+            try:
+                # Read the CSV in chunks to handle memory constraints
+                for chunk in pd.read_csv(
+                    csv_file,
+                    encoding="ISO-8859-1",
+                    names=SENTIMENT140_COLUMNS,
+                    chunksize=chunk_size,
+                ):
+                    chunks.append(chunk)
+                    print(f"Loaded chunk with {len(chunk):,} rows. Total chunks: {len(chunks)}")
+
+                # Combine all chunks
+                df_raw = pd.concat(chunks, ignore_index=True)
+                print(f"Successfully loaded full dataset with {len(df_raw):,} rows")
+
+                # Verify we got the expected number of rows (should be ~1.6M)
+                if len(df_raw) < 1_500_000:
+                    print(f"WARNING: Expected ~1.6M rows but got {len(df_raw):,} rows")
+                    print("This might indicate memory constraints or file issues")
+                else:
+                    print(f"✅ Full dataset loaded successfully with {len(df_raw):,} rows")
+
+            except Exception as e:
+                print(f"Error loading full dataset with chunking: {e}")
+                print("Falling back to direct loading...")
+                # Fallback to direct loading
+                df_raw = pd.read_csv(csv_file, encoding="ISO-8859-1", names=SENTIMENT140_COLUMNS)
+                print(f"Loaded {len(df_raw):,} rows with direct loading")
         else:
             # Load with sampling for memory efficiency
             df_raw = pd.read_csv(csv_file, encoding="ISO-8859-1", names=SENTIMENT140_COLUMNS)
