@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install DVC with S3 support
 RUN pip install --no-cache-dir dvc[s3]
 
-# Copy DVC files (excluding config for security)
+# Copy DVC configuration files
+COPY .dvc/ .dvc/
 COPY .dvcignore .dvcignore
 COPY deberta3_lora_400000k.dvc deberta3_lora_400000k.dvc
 
@@ -36,14 +37,10 @@ ENV AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 ENV AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 ENV DOCKER_CONTAINER=true
 
-# Initialize Git repository, configure DVC remote, and pull the model from S3
+# Initialize Git repository and pull the model from S3 using DVC
 RUN git init && \
     git config user.email "docker@example.com" && \
     git config user.name "Docker User" && \
-    dvc remote add -d storage s3://${DVC_BUCKET} && \
-    dvc remote modify storage access_key_id ${AWS_ACCESS_KEY_ID} && \
-    dvc remote modify storage secret_access_key ${AWS_SECRET_ACCESS_KEY} && \
-    dvc remote modify storage region ${AWS_DEFAULT_REGION} && \
     dvc pull deberta3_lora_400000k.dvc
 
 # Copy the rest of the application
