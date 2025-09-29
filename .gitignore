@@ -19,3 +19,4 @@ MLflowStore/
 local_readme/
 /deberta3_lora_400000k
 docs/
+.dvc/config
