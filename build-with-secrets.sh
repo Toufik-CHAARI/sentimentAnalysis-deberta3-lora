@@ -66,7 +66,7 @@ Environment Variables:
   - AWS_ACCESS_KEY_ID
   - AWS_SECRET_ACCESS_KEY
   - AWS_DEFAULT_REGION
-  - DVC_BUCKET
+  - DVC_S3_BUCKET
 
 EOF
 }
@@ -87,7 +87,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -b|--bucket)
-            DVC_BUCKET="$2"
+            DVC_S3_BUCKET="$2"
             shift 2
             ;;
         -t|--tag)
@@ -117,8 +117,8 @@ if [[ -z "$AWS_SECRET_ACCESS_KEY" ]]; then
     exit 1
 fi
 
-if [[ -z "$DVC_BUCKET" ]]; then
-    print_error "DVC S3 Bucket name is required. Use -b or --bucket option or set DVC_BUCKET environment variable."
+if [[ -z "$DVC_S3_BUCKET" ]]; then
+    print_error "DVC S3 Bucket name is required. Use -b or --bucket option or set DVC_S3_BUCKET environment variable."
     exit 1
 fi
 
@@ -127,7 +127,7 @@ AWS_DEFAULT_REGION="$AWS_REGION"
 
 print_info "Building Docker image: ${IMAGE_NAME}:${IMAGE_TAG}"
 print_info "AWS Region: ${AWS_DEFAULT_REGION}"
-print_info "DVC Bucket: ${DVC_BUCKET}"
+print_info "DVC Bucket: ${DVC_S3_BUCKET}"
 print_info "AWS Access Key ID: ${AWS_ACCESS_KEY_ID:0:8}..."
 
 # Build the Docker image with build arguments
@@ -135,7 +135,7 @@ docker build \
     --build-arg AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
     --build-arg AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
     --build-arg AWS_DEFAULT_REGION="$AWS_DEFAULT_REGION" \
-    --build-arg DVC_BUCKET="$DVC_BUCKET" \
+    --build-arg DVC_S3_BUCKET="$DVC_S3_BUCKET" \
     -t "${IMAGE_NAME}:${IMAGE_TAG}" \
     .
 

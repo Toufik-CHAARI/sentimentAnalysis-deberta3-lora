@@ -19,8 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install DVC with S3 support
 RUN pip install --no-cache-dir dvc[s3]
 
-# Copy DVC configuration files
-COPY .dvc/ .dvc/
+# Copy DVC files (excluding config for security)
 COPY .dvcignore .dvcignore
 COPY deberta3_lora_400000k.dvc deberta3_lora_400000k.dvc
 
@@ -28,19 +27,24 @@ COPY deberta3_lora_400000k.dvc deberta3_lora_400000k.dvc
 ARG AWS_ACCESS_KEY_ID
 ARG AWS_SECRET_ACCESS_KEY
 ARG AWS_DEFAULT_REGION=eu-west-3
-ARG DVC_BUCKET=sentiment-analysis-deberta3-lora
+ARG DVC_S3_BUCKET=sentiment-analysis-deberta3-lora
 
 # Set environment variables for DVC
-ENV DVC_BUCKET=${DVC_BUCKET}
+ENV DVC_S3_BUCKET=${DVC_S3_BUCKET}
 ENV AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 ENV AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 ENV AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 ENV DOCKER_CONTAINER=true
 
-# Initialize Git repository and pull the model from S3 using DVC
+# Initialize Git repository, initialize DVC, configure remote, and pull the model from S3
 RUN git init && \
     git config user.email "docker@example.com" && \
     git config user.name "Docker User" && \
+    dvc init --no-scm && \
+    dvc remote add -d storage s3://${DVC_S3_BUCKET} && \
+    dvc remote modify storage access_key_id ${AWS_ACCESS_KEY_ID} && \
+    dvc remote modify storage secret_access_key ${AWS_SECRET_ACCESS_KEY} && \
+    dvc remote modify storage region ${AWS_DEFAULT_REGION} && \
     dvc pull deberta3_lora_400000k.dvc
 
 # Copy the rest of the application

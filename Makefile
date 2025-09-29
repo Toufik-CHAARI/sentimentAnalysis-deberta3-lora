@@ -35,16 +35,16 @@ build-with-secrets: ## Build Docker image with AWS credentials (requires environ
 		echo "Set it with: export AWS_SECRET_ACCESS_KEY=your-secret-key"; \
 		exit 1; \
 	fi
-	@if [ -z "$(DVC_BUCKET)" ]; then \
-		echo "ERROR: DVC_BUCKET environment variable is required"; \
-		echo "Set it with: export DVC_BUCKET=your-bucket-name"; \
+	@if [ -z "$(DVC_S3_BUCKET)" ]; then \
+		echo "ERROR: DVC_S3_BUCKET environment variable is required"; \
+		echo "Set it with: export DVC_S3_BUCKET=your-bucket-name"; \
 		exit 1; \
 	fi
 	docker build \
 		--build-arg AWS_ACCESS_KEY_ID="$(AWS_ACCESS_KEY_ID)" \
 		--build-arg AWS_SECRET_ACCESS_KEY="$(AWS_SECRET_ACCESS_KEY)" \
 		--build-arg AWS_DEFAULT_REGION="$(AWS_DEFAULT_REGION)" \
-		--build-arg DVC_BUCKET="$(DVC_BUCKET)" \
+		--build-arg DVC_S3_BUCKET="$(DVC_S3_BUCKET)" \
 		-t $(IMAGE_NAME):$(TAG) .
 
 .PHONY: run
@@ -54,7 +54,7 @@ run: ## Run Docker container locally
 		-e AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID) \
 		-e AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY) \
 		-e AWS_DEFAULT_REGION=$(AWS_DEFAULT_REGION) \
-		-e DVC_BUCKET=$(DVC_BUCKET) \
+		-e DVC_S3_BUCKET=$(DVC_S3_BUCKET) \
 		$(IMAGE_NAME):$(TAG)
 
 .PHONY: run-detached
@@ -65,7 +65,7 @@ run-detached: ## Run Docker container in background
 		-e AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID) \
 		-e AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY) \
 		-e AWS_DEFAULT_REGION=$(AWS_DEFAULT_REGION) \
-		-e DVC_BUCKET=$(DVC_BUCKET) \
+		-e DVC_S3_BUCKET=$(DVC_S3_BUCKET) \
 		$(IMAGE_NAME):$(TAG)
 
 .PHONY: stop
@@ -196,6 +196,6 @@ setup-env: ## Show environment setup instructions
 	@echo "  AWS_ACCESS_KEY_ID=your-access-key"
 	@echo "  AWS_SECRET_ACCESS_KEY=your-secret-key"
 	@echo "  AWS_DEFAULT_REGION=us-east-1"
-	@echo "  DVC_BUCKET=your-s3-bucket-name"
+	@echo "  DVC_S3_BUCKET=your-s3-bucket-name"
 	@echo ""
 	@echo "Set these in your shell or .env file before running Docker commands."

@@ -1,7 +1,0 @@
-[core]
-    remote = storage
-['remote "storage"']
-    url = s3://sentiment-analysis-deberta3-lora
-    access_key_id = ${AWS_ACCESS_KEY_ID}
-    secret_access_key = ${AWS_SECRET_ACCESS_KEY}
-    region = ${AWS_DEFAULT_REGION}
